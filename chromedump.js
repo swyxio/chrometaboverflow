@@ -122,6 +122,37 @@ function shouldSkipContentType(url) {
     return skipExtensions.some(ext => urlLower.includes(ext));
 }
 
+// Rewrite x.com (and legacy twitter.com) URLs to nitter.net for scraping purposes.
+// This is useful because x.com frequently blocks automated readers / has auth walls.
+function getScrapeUrl(originalUrl) {
+    try {
+        const u = new URL(originalUrl);
+        const hostname = u.hostname.toLowerCase();
+
+        // Fragments don't affect server-side content; remove to improve cacheability.
+        u.hash = '';
+
+        const isX = hostname === 'x.com' || hostname.endsWith('.x.com');
+        const isTwitter = hostname === 'twitter.com' || hostname.endsWith('.twitter.com');
+
+        if (isX || isTwitter) {
+            const rewrittenFrom = u.hostname;
+            u.hostname = 'nitter.net';
+            return {
+                scrapeUrl: u.toString(),
+                rewritten: true,
+                rewrittenFrom,
+                rewrittenTo: 'nitter.net'
+            };
+        }
+
+        return { scrapeUrl: originalUrl, rewritten: false };
+    } catch (error) {
+        // Invalid URL; let upstream logic decide what to do.
+        return { scrapeUrl: originalUrl, rewritten: false, invalidUrl: true };
+    }
+}
+
 async function extractChromeTabs() {
     try {
         console.log('🔍 Step 1: Extracting Chrome tabs...');
@@ -235,10 +266,21 @@ async function fetchTabContentWithSummary(tab, attempt = 0, progressInfo = null)
     }
     
     try {
+        const { scrapeUrl, rewritten, rewrittenFrom, rewrittenTo } = getScrapeUrl(tab.url);
+
+        if (rewritten && progressInfo) {
+            console.log(`🔁 [${progressInfo.current}/${progressInfo.total}] Rewriting for scrape: ${rewrittenFrom} → ${rewrittenTo}`);
+        } else if (rewritten) {
+            console.log(`🔁 Rewriting for scrape: ${rewrittenFrom} → ${rewrittenTo}`);
+        }
+
         // Step 1: Fetch content from Jina
-        const jinaUrl = `https://r.jina.ai/${tab.url}`;
+        const jinaUrl = `https://r.jina.ai/${scrapeUrl}`;
         if (progressInfo) {
             console.log(`📖 [${progressInfo.current}/${progressInfo.total}] Reading: ${tab.url.substring(0, 30)} ${tab.title.substring(0, 50)}...`);
+            if (rewritten) {
+                console.log(`   ↳ Scrape URL: ${scrapeUrl.substring(0, 80)}${scrapeUrl.length > 80 ? '...' : ''}`);
+            }
         }
         
         const controller = new AbortController();
